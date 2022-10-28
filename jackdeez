@@ -58,6 +58,7 @@ connection_manager() {
     # filter out all connections from list of available sinks
     __connection=$(echo "${__jack_aliases[*]}" | sed 's/, /\n/g' | sed 's/,/ /g' | sed 's/\"//g' | grep -v -x -F -f .found_connections | gum choose --limit 2 --height 8)
     rm .found_connections
+    [[ $(echo "$__connection" | wc -l) -eq 2 ]] || return
     __header=$(gum style --foreground 000 --background 999 --align center " Connecting ")
     __selections=$(gum style --border double --padding "0 1" "${__connection}")
 	__args=$(echo "jack_connect $(echo "$__connection" | awk '{print "\""$0"\""}' | tr '\n' ' ')")
@@ -103,12 +104,12 @@ handle_alsa() {
     __man_entry=$(echo "$__man" | awk -F'\n{2}\s+-[A-Za-z], ' '{print $0}' | grep -e "$__expression" -A $__lines) || echo "$?"
     echo $__man_entry
     __line_count=$(echo $__man_entry | fold -w "$COLUMNS" | wc -l)
-    case $__selection in
+    case "$__input" in
         device*)
             __selected_device=$(gum choose $__suggested_devices || exit_to_parent_menu v)
             clear_line $__line_count
             jack_control dps device $__selected_device
-        ;;
+            ;;
         capture*)
             __options="$__suggested_devices default"
             __selected_device=$(gum choose $__options || exit_to_parent_menu v)
@@ -293,15 +294,25 @@ driver_engine_manager() {
 
 midi_manager() {
     # export midi ports to jack
-    a2j_control --ehw 2&> /dev/null || true
-    a2j_control --start 2&> /dev/null || true
+    a2j_control --start 2> /dev/null || true
+    a2j_control --ehw 2> /dev/null || true
     gum style --align=center --border double --padding 1 "$(a2j_control --status | tail -n +2)"
+}
+
+usage() {
+    echo -e
+"$0: [mcdvs]
+    -m = enables midi passthrough to jackd
+    -c = connection manager
+    -d = disconnect manager
+    -v = driver/engine parameter manager
+    -s = stop jackd"
 }
 
 # make sure jack is running
 jack_control status | grep -q "started" || jack_control start 2&> /dev/null
 
-while getopts "cdvmq" o; do
+while getopts "cdvms" o; do
     case "${o}" in
         m) # midi manager
             midi_manager
@@ -319,7 +330,7 @@ while getopts "cdvmq" o; do
             driver_engine_manager
             exit 0
         ;;
-        q)
+        s)
             jack_control stop
             exit 0
         ;;
