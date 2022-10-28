@@ -1,0 +1,356 @@
+#!/bin/bash -e
+
+__distro=$( cat /etc/*-release | tr [:upper:] [:lower:] | grep -Poi '(debian|ubuntu|fedora|raspbian|arch|kali)' | uniq )
+
+# we need gum, jack_control, and jack_lsp
+
+if [[ $__distro=*debian* ]] || [[ $__distro=*ubuntu* ]] || [[ $__debian=*kali* ]] || [[ $__debian=*raspbian* ]] ; then
+    if [ ! -f "/usr/bin/jack_control" ] || [ ! -f "/usr/bin/gum" ] || [ ! -f "/usr/bin/a2j_control" ]; then
+        apt-get install gum jackd2 a2jmidid
+    fi
+elif [[ $__disto=*arch* ]]; then
+    if [ ! -f "/usr/bin/jack_control" ] || [ ! -f "/usr/bin/gum" ] || [ ! -f "/usr/bin/a2j_control" ]; then
+        pacman -S jack2-dbus gum a2jmidid
+    fi
+elif [[ $__distro=*fedora* ]]; then
+    if [ ! -f "/usr/bin/jack_control" ] || [ ! -f "/usr/bin/gum" ]; then
+        dnf install jack-audio-connection-kit-dbus
+        dnf install jack-audio-connection-kit-example-clients
+        dnf install a2jmidid-8
+        echo '[charm]
+name=Charm
+baseurl=https://repo.charm.sh/yum/
+enabled=1
+gpgcheck=1
+gpgkey=https://repo.charm.sh/yum/gpg.key' | sudo tee /etc/yum.repos.d/charm.repo
+        sudo yum install gum
+    fi
+fi
+
+clear_line() {
+    if [[ -z $1 ]]; then
+        printf "\33[A[2K\r\33[2K"
+    else
+        for ((n=0;n<$1;n++)); do
+            printf "\33[A[2K\r\33[2K"
+        done
+    fi
+}
+
+get_jack_connections() {
+    __last_line=
+    while IFS= read -r line; do
+        if [[ $line = " "* ]]; then
+            echo "$__last_line,$(echo $line | xargs)" | xargs
+            __last_line=
+        else
+		__last_line=$(echo "$line" | xargs)
+        fi
+    done < <(jack_lsp -c)
+}
+
+connection_manager() {
+    __jack_aliases=$(jack_lsp -c | grep -E "^[^ ]")
+    # get all connections
+    __connections="$(get_jack_connections | awk -F, '{print "\""$1"\""",""\""$2"\""}')"
+    __connections=$(echo "$__connections" | awk -F, '{print $1","$2}' )
+    echo "$__connections" | tr "," "\n" | sort | uniq | sed 's/\"//g' > .found_connections
+    # filter out all connections from list of available sinks
+    __connection=$(echo "${__jack_aliases[*]}" | sed 's/, /\n/g' | sed 's/,/ /g' | sed 's/\"//g' | grep -v -x -F -f .found_connections | gum choose --limit 2 --height 8)
+    rm .found_connections
+    __header=$(gum style --foreground 000 --background 999 --align center " Connecting ")
+    __selections=$(gum style --border double --padding "0 1" "${__connection}")
+	__args=$(echo "jack_connect $(echo "$__connection" | awk '{print "\""$0"\""}' | tr '\n' ' ')")
+    gum confirm "$(gum join --align center --vertical "$__header" "$__selections" "Are you sure?")" && eval $__args || exit 1
+}
+
+disconnect_manager() {
+    if [[ -z $(jack_lsp -c | grep -E "^\s+") ]]; then
+        echo "No connections found!"
+        exit
+    fi
+
+    # sort and get uniq so A,B does not equal B,A
+    __connections="$(get_jack_connections | awk -F, '{print $1","$2}')"
+    __connections=$(echo "$__connections" | awk -F, '{print $1","$2}' | gum choose --no-limit)
+    __header=$(gum style --foreground 000 --background 999 --align center " Disconnecting ")
+    while IFS= read -r line; do
+        __args=$(echo $line | tr ',' '\n' | awk '{print "\""$0"\""}' | tr '\n' ' ')
+        __selection=$(gum style --border double --padding "0 1" --align center --width 40 $__args)
+        __cmd="jack_disconnect $__args"
+        gum confirm "$(gum join --align center --vertical "$__header" "$__selection" "Are you sure?")" && eval $__cmd || exit 1
+    done < <(for v in "${__connections[@]}"; do echo "$v"; done)
+}
+
+current_driver() {
+    jack_control dg | tail -n +2
+}
+
+exit_to_parent_menu() {
+    ./jackdeez -$1
+}
+
+handle_alsa() {
+    params=$(jack_control dp | tail -n +2 | awk -F":" '{gsub(/^[ \t]+/, "", $1); print $1}' | tr '\)' " ");
+    defaults=$(jack_control dp | tail -n +2 | awk -F'(' '{print " [ "$NF"]"}' | tr '\)' ' '); 
+    __selection=$(gum join --horizontal "$params" "$defaults" | tail -n +1)
+    __input=$(echo "$__selection" | gum choose --limit 1 || exit_to_parent_menu v)
+    __input=$(echo "$__input" | awk '{print $1}')
+    __suggested_devices=$(jack_control dpd device | awk "/'/{print}"  | cut -d'-' -f1 | sed -E 's/^\s+/ /g' | tr "'" " " | xargs)
+    __man=$(MANWIDTH=1000 man jackd | grep "ALSA BACKEND" -A 63 | tail -n +2)
+    __lines=$([[ "$__input" == "hwmon" ]] && echo 5 || echo 1)
+    __expression="-[A-Za-z], --$__input"
+    __man_entry=$(echo "$__man" | awk -F'\n{2}\s+-[A-Za-z], ' '{print $0}' | grep -e "$__expression" -A $__lines) || echo "$?"
+    echo $__man_entry
+    __line_count=$(echo $__man_entry | fold -w "$COLUMNS" | wc -l)
+    case $__selection in
+        device*)
+            __selected_device=$(gum choose $__suggested_devices || exit_to_parent_menu v)
+            clear_line $__line_count
+            jack_control dps device $__selected_device
+        ;;
+        capture*)
+            __options="$__suggested_devices default"
+            __selected_device=$(gum choose $__options || exit_to_parent_menu v)
+            clear_line $__line_count
+            if [ $__selected_device=default ]; then
+                jack_control dpr capture
+            else
+                jack_control dps capture $__selected_device
+            fi
+        ;;
+        playback*)
+            __options="$__suggested_devices default"
+            __selected_device=$(gum choose $__options || exit_to_parent_menu v)
+            clear_line $__line_count
+            if [ "$__selected_device" = "default" ]; then
+                jack_control dpr playback
+            else
+                jack_control dps playback $__selected_device
+            fi
+        ;;
+        rate*)
+            __sample_rate=$(gum choose "44100" "48000" "88200" "96000" "192000" "custom" --limit 1 || exit_to_parent_menu v)
+            clear_line $__line_count
+            if [ "$__sample_rate" = "custom" ]; then
+                __sample_rate=$(gum input --placeholder 44100 --char-limit=6 || exit_to_parent_menu v)
+            fi
+
+            if [[ ! -z $__sample_rate ]]; then
+                jack_control dps rate $__sample_rate
+            fi
+        ;;
+        period*)
+            __period=$(gum choose "64" "128" "256" "512" "1024" "2048" "4096" "8192" "custom" --limit 1 || exit_to_parent_menu v)
+            clear_line $__line_count
+            if [ "$__period" = "custom" ]; then
+                __period=$(gum input --placeholder 256 --char-limit=6 || exit_to_parent_menu v)
+            fi
+
+            if [[ ! -z $__period ]]; then
+                jack_control dps period $__period
+            fi
+        ;;
+        dither*)
+            __dither_option=$(gum choose "[t]riangular" "[r]ectangular" "[s]haped" "[n]one" || exit_to_parent_menu v)
+            clear_line $__line_count
+            if [[ "$__dither_option" = [t* ]]; then
+                jack_control dps dither t
+            elif [[ "$__dither_option" = [r* ]]; then
+                jack_control dps dither r
+            elif [[ "$__dither_option" = [s* ]]; then
+                jack_control dps dither s
+            else
+                jack_control dps dither n
+            fi
+        ;;
+        midi-driver*)
+            __driver=$(gum choose "raw" "seq" || exit_to_parent_menu v)
+            clear_line $__line_count
+
+            jack_control dps midi-driver $__driver
+        ;;
+        inchannels*|outchannels*)
+            __chans=$(gum choose "1" "2" "custom" || exit_to_parent_menu v)
+            clear_line $__line_count
+            
+            if [ "$__chans" = "custom" ]; then
+                __chans=$(gum input --placeholder 2 --char-limit 1 || exit_to_parent_menu v)
+            fi
+
+            if [[ ! -z $__chans ]]; then
+                jack_control dps inchannels $__chans
+            fi
+        ;;
+        input-latency*|output-latency*)
+            __latency=$(gum input --placeholder 0 --char-limit 2 || exit_to_parent_menu v)
+            clear_line $__line_count
+
+            jack_control dps $__input $__latency
+        ;;
+        nperiods*)
+            __nperiods=$(gum choose "1" "2" "3" "4" "custom" --limit 1 || exit_to_parent_menu v)
+            clear_line $__line_count
+            if [ "$__nperiods" = "custom" ]; then
+                __nperiods=$(gum input --placeholder 2 --char-limit 1 || exit_to_parent_menu v)
+            fi
+
+            if [[ ! -z $__nperiods ]]; then
+                jack_control dps nperiods $__nperiods
+            fi
+        ;; # everything below is all of the boolean options
+        hwmon*|hwmeter*|duplex*|softmode*|monitor*|shorts*)
+            __setting=$(gum choose "True" "False" --limit 1 || exit_to_parent_menu v)
+            clear_line $__line_count
+            if [ "$__setting" = "True" ]; then
+                jack_control dps $__input True
+            else
+                jack_control dps $__input False
+            fi
+        ;;
+    esac
+}
+
+driver_engine_manager() {
+    while true; do
+        __option=$(gum choose --limit 1 \
+            "0: Change Driver Type [ $(jack_control dg | tail -n +2) ]" \
+            "1: Driver Parameters" \
+            "2: Engine Parameters" \
+        )
+        
+        if [[ $__option = 0* ]]; then
+            __current_driver=$(current_driver)
+            __drivers=$(jack_control dl | tail -n +2)
+            # \todo find some bash way to exit to parent menu on esc, but completely quit on SIGINT (ctrl+c)
+            __selected_driver=$(gum choose --selected=$__current_driver --limit 1 $__drivers || exit_to_parent_menu v)
+            [ "$__current_driver" != "$__selected_driver" ] && jack_control ds $__selected_driver 
+        elif [[ $__option = 1* ]]; then
+            case "$(current_driver)" in
+                alsa*)
+                    handle_alsa
+                ;;
+            esac
+        elif [[ $__option = 2* ]]; then # engine parameters
+            params=$(jack_control ep | tail -n +2 | awk -F":" '{gsub(/^[ \t]+/, "", $1); print $1}' | tr '\)' " ");
+            defaults=$(jack_control ep | tail -n +2 | awk -F'(' '{print " [ "$NF"]"}' | tr '\)' ' '); 
+            options=$(gum join --horizontal "$params" "$defaults" | sed -E '/self-connect|sync|slave-drivers/d')
+            __selection=$(echo "$options" | gum choose --limit 1 || exit_to_parent_menu v )
+            __input=$(echo "$__selection" | awk '{print $1}')
+            __suggested_devices=$(jack_control epd device | awk "/'/{print}"  | cut -d'-' -f1 | sed -E 's/^\s+/ /g' | tr "'" " " | xargs)
+            __man=$(MANWIDTH=1000 man jackd | grep -e "^OPTIONS" -A 65 | tail -n +2)
+            __lines=$([[ "$__input" == "internal-session-file" ]] && echo 10 || echo 1)
+            
+            if [ "$__input" = "clock-source" ]; then
+                __input="clocksource"
+            elif [ "$__input" = "client-timeout" ]; then
+                __input="timeout"
+            fi
+            __expression="--$__input[^\.]*$"
+            __man_entry=$(echo "$__man" | awk -F'\n{2}[^-]+-{1,2},?\s?[A-Za-z], ' '{print $1}' | grep -e "$__expression" -A $__lines) || continue
+            echo $__man_entry | awk -F' -- ' '{print $1}'
+            __line_count=$(echo $__man_entry | fold -w "$COLUMNS" | wc -l)
+            case $__input in
+                driver*)
+                    __allowed_value=$(jack_control epd driver | tail -n +5 | awk '{print $NF}' | gum choose --limit 1 || exit_to_parent_menu v)
+                    clear_line $__line_count
+                    jack_control eps driver $__allowed_value
+                ;;
+                name*)
+                    __name=$(gum input --placeholder="Enter jack server name..." || exit_to_parent_menu v)
+                    clear_line $__line_count
+                    jack_control eps name $__name
+                ;;
+                realtime-priority*)
+                    echo "https://jackaudio.org/faq/linux_rt_config.html"
+                    __priority=$(gum input --placeholder="Enter a number..." || exit_to_parent_menu v)
+                    clear_line "(( $__line_count + 1 ))"
+                    jack_control eps realtime-priority $__priority
+                ;;
+                client-timeout*|port-max*)
+                    __priority=$(gum input --placeholder="Enter a number..." || exit_to_parent_menu v)
+                    clear_line $__line_count
+                    jack_control eps $__input $__priority
+                ;;
+                clock-source*)
+                    __choice=$(gum choose --limit 1 "h" "s" || exit_to_parent_menu v)
+                    clear_line $__line_count
+                    jack_control eps clock-source $__choice
+                ;; # all of these are boolean fields
+                realtime*|temporary*|verbose*|replace-registry*)
+                    __setting=$(gum choose "True" "False" --limit 1 || exit_to_parent_menu v)
+                    clear_line $__line_count
+                    if [ "$__setting" = "True" ]; then
+                        jack_control eps $__input True
+                    else
+                        jack_control eps $__input False
+                    fi
+                ;;
+            esac
+        fi
+    done
+}
+
+midi_manager() {
+    # export midi ports to jack
+    a2j_control --ehw 2&> /dev/null || true
+    a2j_control --start 2&> /dev/null || true
+    gum style --align=center --border double --padding 1 "$(a2j_control --status | tail -n +2)"
+}
+
+# make sure jack is running
+jack_control status | grep -q "started" || jack_control start 2&> /dev/null
+
+while getopts "cdvmq" o; do
+    case "${o}" in
+        m) # midi manager
+            midi_manager
+            exit 0
+        ;;
+        c) # connection manager
+            connection_manager
+            exit 0                
+        ;;
+        d) # disconnect manager
+            disconnect_manager
+            exit 0
+        ;;
+        v)
+            driver_engine_manager
+            exit 0
+        ;;
+        q)
+            jack_control stop
+            exit 0
+        ;;
+        *)
+            usage
+        ;;
+    esac
+done
+
+__option=$(gum choose --limit=1 "Enable Midi Passthrough" "Connect Ports" "Disconnect Ports" "Driver/Engine Parameter Manager" "Stop jackd")
+case "$__option" in
+    "Enable Midi Passthrough") # midi manager
+        midi_manager
+        exit 0
+    ;;
+    "Connect Ports") # connection manager
+        connection_manager
+        exit 0                
+    ;;
+    "Disconnect Ports") # disconnect manager
+        disconnect_manager
+        exit 0
+    ;;
+    "Driver/Engine Parameter Manager")
+        driver_engine_manager
+        exit 0
+    ;;
+    "Stop jackd")
+        jack_control stop
+        exit 0
+    ;;
+esac
+
+exit 0
