@@ -92,7 +92,7 @@ current_driver() {
 }
 
 exit_to_parent_menu() {
-    ./jackdeez -$1
+    #./jackdeez -$1
 }
 
 handle_alsa() {
