@@ -6,6 +6,9 @@ __distro=$( cat /etc/*-release | tr [:upper:] [:lower:] | grep -Poi '(debian|ubu
 
 if [[ $__distro=*debian* ]] || [[ $__distro=*ubuntu* ]] || [[ $__debian=*kali* ]] || [[ $__debian=*raspbian* ]] ; then
     if [ ! -f "/usr/bin/jack_control" ] || [ ! -f "/usr/bin/gum" ] || [ ! -f "/usr/bin/a2j_control" ]; then
+	sudo mkdir -p /etc/apt/keyrings
+	curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
+	echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list
         apt-get install gum jackd2 a2jmidid
     fi
 elif [[ $__disto=*arch* ]]; then
