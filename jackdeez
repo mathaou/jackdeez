@@ -102,11 +102,11 @@ handle_alsa() {
     __input=$(echo "$__selection" | gum choose --limit 1 || exit_to_parent_menu v)
     __input=$(echo "$__input" | awk '{print $1}')
     __suggested_devices=$(jack_control dpd device | awk "/'/{print}"  | cut -d'-' -f1 | sed -E 's/^\s+/ /g' | tr "'" " " | xargs)
-    __man=$(MANWIDTH=1000 man jackd | grep "ALSA BACKEND" -A 63 | tail -n +2)
+    #__man=$(MANWIDTH=1000 man jackd | grep "ALSA BACKEND" -A 63 | tail -n +2)
     __lines=$([[ "$__input" == "hwmon" ]] && echo 5 || echo 1)
     __expression="-[A-Za-z], --$__input"
-    __man_entry=$(echo "$__man" | awk -F'\n{2}\s+-[A-Za-z], ' '{print $0}' | grep -e "$__expression" -A $__lines) || echo "$?"
-    echo $__man_entry
+    #__man_entry=$(echo "$__man" | awk -F'\n{2}\s+-[A-Za-z], ' '{print $0}' | grep -e "$__expression" -A $__lines) || echo "$?"
+    #echo $__man_entry
     __line_count=$(echo $__man_entry | fold -w "$COLUMNS" | wc -l)
     case "$__input" in
         device*)
@@ -243,7 +243,7 @@ driver_engine_manager() {
             __selection=$(echo "$options" | gum choose --limit 1 || exit_to_parent_menu v )
             __input=$(echo "$__selection" | awk '{print $1}')
             __suggested_devices=$(jack_control epd device | awk "/'/{print}"  | cut -d'-' -f1 | sed -E 's/^\s+/ /g' | tr "'" " " | xargs)
-            __man=$(MANWIDTH=1000 man jackd | grep -e "^OPTIONS" -A 65 | tail -n +2)
+            #__man=$(MANWIDTH=1000 man jackd | grep -e "^OPTIONS" -A 65 | tail -n +2)
             __lines=$([[ "$__input" == "internal-session-file" ]] && echo 10 || echo 1)
             
             if [ "$__input" = "clock-source" ]; then
@@ -252,8 +252,8 @@ driver_engine_manager() {
                 __input="timeout"
             fi
             __expression="--$__input[^\.]*$"
-            __man_entry=$(echo "$__man" | awk -F'\n{2}[^-]+-{1,2},?\s?[A-Za-z], ' '{print $1}' | grep -e "$__expression" -A $__lines) || continue
-            echo $__man_entry | awk -F' -- ' '{print $1}'
+            #__man_entry=$(echo "$__man" | awk -F'\n{2}[^-]+-{1,2},?\s?[A-Za-z], ' '{print $1}' | grep -e "$__expression" -A $__lines) || continue
+            #echo $__man_entry | awk -F' -- ' '{print $1}'
             __line_count=$(echo $__man_entry | fold -w "$COLUMNS" | wc -l)
             case $__input in
                 driver*)
